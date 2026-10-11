@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
 /.pnp
@@ -30,7 +28,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files
 .env*
 
 # vercel
@@ -39,3 +37,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# temp & local storage
+~$*
+data/
+uploads/
+
+# Legacy exam digitizing scripts and raw assets
+*.docx
+*.jpg
+*.jpeg
+*.png
+digitize_exam.py
+de_thi_tieng_anh*
+
+# Agents & Claude tool configuration directories
+.agents/
+.claude/
