@@ -1,3 +1,5 @@
+import { jsonrepair } from "jsonrepair";
+
 export interface ExtractedQuestion {
   questionNumber: number;
   questionType: "pronunciation" | "stress" | "error_correction" | "multiple_choice" | "reading" | "writing" | "dialogue";
@@ -48,9 +50,9 @@ function cleanBase64(raw: string): string {
 // Danh sách các mô hình Vision khả dụng thực tế của Google (ưu tiên các mô hình Vision mạnh mẽ nhất)
 const CANDIDATE_MODELS = [
   "gemini-2.5-flash",
+  "gemini-3.1-pro-preview",
+  "gemini-3-flash-preview",
   "gemini-flash-latest",
-  "gemini-2.5-pro",
-  "gemini-3.5-flash",
 ];
 
 export async function extractExamFromImages(
@@ -78,7 +80,7 @@ RULES FOR ACCURACY:
    - In prompt or options, clearly mark underlined/bold letters being tested using <u>...</u>.
 6. SOLVE AND EXPLAIN:
    - For every question, determine the correct answer ('A', 'B', 'C', or 'D').
-   - Provide a clear, pedagogical 'explanation' in Vietnamese explaining why this answer is correct and why other choices are incorrect.
+   - Provide a concise, clear 'explanation' in Vietnamese (1-2 sentences explaining why the answer is correct). Keep explanations concise and focused so the complete exam fits comfortably into the JSON output.
 
 OUTPUT FORMAT: Return ONLY a valid JSON object with this exact TypeScript structure:
 {
@@ -102,7 +104,7 @@ OUTPUT FORMAT: Return ONLY a valid JSON object with this exact TypeScript struct
           "underlinedParts": { "A": "...", "B": "...", "C": "...", "D": "..." } or null,
           "correctAnswer": "A" | "B" | "C" | "D",
           "correctionText": "string or null",
-          "explanation": "string (giải thích chi tiết bằng tiếng Việt)"
+          "explanation": "string (giải thích ngắn gọn 1-2 câu bằng tiếng Việt)"
         }
       ]
     }
@@ -129,28 +131,44 @@ Do not include markdown backticks around the JSON. Output raw JSON only.`;
     const url = `${GEMINI_API_BASE}/${model}:generateContent`;
     try {
       console.log(`[Gemini OCR] Đang thử gọi mô hình: ${model}...`);
-      const response = await fetch(url, {
+      const payload = {
+        contents: [{ parts }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 32768,
+          responseMimeType: "application/json",
+        },
+        safetySettings: [
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
+        ],
+      };
+
+      let response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-goog-api-key": key,
         },
-        body: JSON.stringify({
-          contents: [{ parts }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 16384,
-            responseMimeType: "application/json",
-          },
-          safetySettings: [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
-          ],
-        }),
+        body: JSON.stringify(payload),
       });
+
+      // Nếu gặp lỗi 503 quá tải tạm thời, đợi 1.5 giây và thử lại 1 lần
+      if (response.status === 503) {
+        console.warn(`[Gemini OCR] Mô hình ${model} bị 503, đang đợi 1.5s và thử lại...`);
+        await new Promise((r) => setTimeout(r, 1500));
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-goog-api-key": key,
+          },
+          body: JSON.stringify(payload),
+        });
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -181,7 +199,16 @@ Do not include markdown backticks around the JSON. Output raw JSON only.`;
         cleaned = cleaned.replace(/```json/gi, "").replace(/```/g, "").trim();
       }
 
-      const parsed: ExtractedExamData = JSON.parse(cleaned);
+      let parsed: ExtractedExamData;
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch (parseErr: any) {
+        console.warn(`[Gemini OCR] Parse JSON gốc bị lỗi (${parseErr.message}), đang tự động phục hồi cấu trúc bằng jsonrepair...`);
+        const repaired = jsonrepair(cleaned);
+        parsed = JSON.parse(repaired);
+        console.log(`[Gemini OCR] Phục hồi cấu trúc JSON thành công bằng jsonrepair!`);
+      }
+
       console.log(`[Gemini OCR] Thành công với mô hình: ${model}, trích xuất được ${parsed.totalQuestions || "N"} câu hỏi.`);
       return parsed;
     } catch (err: any) {
