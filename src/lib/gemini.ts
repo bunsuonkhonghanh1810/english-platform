@@ -31,10 +31,10 @@ const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models
 function normalizeImageMimeType(mime?: string): string {
   if (!mime) return "image/jpeg";
   const m = mime.toLowerCase().trim();
-  if (m === "image/jpg" || m === "image/pjpeg" || m === "image/jfif" || m.includes("jpeg") || m.includes("jpg")) return "image/jpeg";
+  if (m === "image/heic" || m === "image/heif" || m.includes("heic") || m.includes("heif")) return "image/heic";
   if (m === "image/png") return "image/png";
   if (m === "image/webp") return "image/webp";
-  if (m === "image/heic" || m === "image/heif") return "image/heic";
+  if (m === "image/jpg" || m === "image/pjpeg" || m === "image/jfif" || m.includes("jpeg") || m.includes("jpg")) return "image/jpeg";
   return "image/jpeg";
 }
 
@@ -45,12 +45,12 @@ function cleanBase64(raw: string): string {
   return clean.replace(/\s+/g, "");
 }
 
-// Danh sách các mô hình Vision khả dụng thực tế của Google (xếp theo độ ổn định & tốc độ cao nhất)
+// Danh sách các mô hình Vision khả dụng thực tế của Google (ưu tiên các mô hình Vision mạnh mẽ nhất)
 const CANDIDATE_MODELS = [
   "gemini-2.5-flash",
   "gemini-flash-latest",
+  "gemini-2.5-pro",
   "gemini-3.5-flash",
-  "gemini-flash-lite-latest",
 ];
 
 export async function extractExamFromImages(
@@ -123,7 +123,7 @@ Do not include markdown backticks around the JSON. Output raw JSON only.`;
     });
   }
 
-  let lastError: any = null;
+  const modelErrors: string[] = [];
 
   for (const model of CANDIDATE_MODELS) {
     const url = `${GEMINI_API_BASE}/${model}:generateContent`;
@@ -142,21 +142,34 @@ Do not include markdown backticks around the JSON. Output raw JSON only.`;
             maxOutputTokens: 16384,
             responseMimeType: "application/json",
           },
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
+          ],
         }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
         console.warn(`[Gemini OCR] Mô hình ${model} trả về lỗi ${response.status}:`, errorText);
-        throw new Error(`Gemini API error (${response.status}) on model ${model}: ${errorText}`);
+        throw new Error(`Gemini API error (${response.status}): ${errorText}`);
       }
 
       const json = await response.json();
       const candidate = json.candidates?.[0];
-      const textOutput = candidate?.content?.parts?.[0]?.text;
+      const rawParts = candidate?.content?.parts || [];
+      const textParts = rawParts
+        .filter((p: any) => typeof p.text === "string" && !p.thought)
+        .map((p: any) => p.text);
+      const textOutput = textParts.join("\n").trim() || rawParts[0]?.text?.trim();
 
       if (!textOutput) {
-        throw new Error(`Không nhận được nội dung từ Gemini (${model}).`);
+        const finishReason = candidate?.finishReason || "UNKNOWN";
+        const blockReason = json.promptFeedback?.blockReason;
+        throw new Error(`Mô hình ${model} không xuất nội dung (Lý do: ${finishReason}${blockReason ? `, Block: ${blockReason}` : ""}).`);
       }
 
       // Clean markdown code fences if present
@@ -173,9 +186,9 @@ Do not include markdown backticks around the JSON. Output raw JSON only.`;
       return parsed;
     } catch (err: any) {
       console.warn(`[Gemini OCR] Lỗi với mô hình ${model}:`, err.message);
-      lastError = err;
+      modelErrors.push(`[${model}]: ${err.message}`);
     }
   }
 
-  throw lastError || new Error("Không thể trích xuất đề thi từ ảnh sau khi thử tất cả mô hình.");
+  throw new Error(`Không thể trích xuất đề thi: ${modelErrors.join(" | ")}`);
 }

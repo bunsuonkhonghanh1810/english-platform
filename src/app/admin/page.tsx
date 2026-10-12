@@ -157,30 +157,20 @@ export default function AdminPage() {
     }
   };
 
-  const fileToBase64 = (file: File): Promise<{ mimeType: string; data: string }> => {
-    return new Promise((resolve, reject) => {
-      // 1. Nếu không phải file ảnh, đọc dữ liệu thô
-      if (!isImageFile(file)) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = (reader.result as string) || "";
-          const commaIdx = result.indexOf(",");
-          const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
-          resolve({ mimeType: "image/jpeg", data: base64Data });
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-        return;
-      }
+  const fileToBase64 = async (file: File): Promise<{ mimeType: string; data: string }> => {
+    const isHeic =
+      file.type === "image/heic" ||
+      file.type === "image/heif" ||
+      file.name.toLowerCase().endsWith(".heic") ||
+      file.name.toLowerCase().endsWith(".heif");
 
-      // 2. Tải và tối ưu độ phân giải ảnh (1600px, JPEG chất lượng 82% siêu rõ nét nhưng nhẹ dưới 400KB)
-      const img = new Image();
-      const objectUrl = URL.createObjectURL(file);
-
-      img.onload = () => {
-        URL.revokeObjectURL(objectUrl);
+    // Phương pháp 1: Dùng createImageBitmap (chuẩn hiện đại, tự động xoay EXIF, hỗ trợ toàn diện trên iOS 15+)
+    if (typeof window !== "undefined" && "createImageBitmap" in window && !isHeic) {
+      try {
+        const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
         const maxDimension = 1600;
-        let { width, height } = img;
+        let width = bitmap.width;
+        let height = bitmap.height;
 
         if (width > maxDimension || height > maxDimension) {
           if (width > height) {
@@ -193,34 +183,90 @@ export default function AdminPage() {
         }
 
         const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
         const ctx = canvas.getContext("2d");
 
-        if (!ctx) {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const result = (reader.result as string) || "";
-            const commaIdx = result.indexOf(",");
-            const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
-            resolve({ mimeType: "image/jpeg", data: base64Data });
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-          return;
+        if (ctx) {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          bitmap.close();
+
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+          const commaIdx = dataUrl.indexOf(",");
+          const base64Data = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+          if (base64Data && base64Data.length > 50) {
+            return { mimeType: "image/jpeg", data: base64Data };
+          }
         }
+      } catch (e) {
+        console.warn("createImageBitmap fallback to Image:", e);
+      }
+    }
 
-        // Vẽ nền trắng để hỗ trợ cả ảnh nền trong suốt (PNG/WebP/scan)
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0, width, height);
+    // Phương pháp 2: Fallback Image element với kiểm tra naturalWidth & giữ objectUrl cho tới khi draw xong
+    return new Promise((resolve, reject) => {
+      if (isHeic) {
+        // Ảnh HEIC: Đọc trực tiếp gửi sang Gemini (Gemini hỗ trợ native HEIC)
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = (reader.result as string) || "";
+          const commaIdx = result.indexOf(",");
+          const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
+          resolve({ mimeType: "image/heic", data: base64Data });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+      }
 
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+
+      const cleanup = () => {
         try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {}
+      };
+
+      img.onload = () => {
+        try {
+          const naturalWidth = img.naturalWidth || img.width || 1200;
+          const naturalHeight = img.naturalHeight || img.height || 1600;
+          const maxDimension = 1600;
+          let width = naturalWidth;
+          let height = naturalHeight;
+
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, width);
+          canvas.height = Math.max(1, height);
+          const ctx = canvas.getContext("2d");
+
+          if (!ctx) throw new Error("No canvas context");
+
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          cleanup(); // Chỉ thu hồi URL sau khi vẽ canvas hoàn tất!
+
           const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
           const commaIdx = dataUrl.indexOf(",");
           const base64Data = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
           resolve({ mimeType: "image/jpeg", data: base64Data });
         } catch {
+          cleanup();
           const reader = new FileReader();
           reader.onload = () => {
             const result = (reader.result as string) || "";
@@ -234,13 +280,14 @@ export default function AdminPage() {
       };
 
       img.onerror = () => {
-        URL.revokeObjectURL(objectUrl);
+        cleanup();
         const reader = new FileReader();
         reader.onload = () => {
           const result = (reader.result as string) || "";
           const commaIdx = result.indexOf(",");
           const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
-          resolve({ mimeType: "image/jpeg", data: base64Data });
+          const mime = file.type || "image/jpeg";
+          resolve({ mimeType: mime, data: base64Data });
         };
         reader.onerror = reject;
         reader.readAsDataURL(file);
