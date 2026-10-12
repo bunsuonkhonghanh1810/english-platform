@@ -42,6 +42,7 @@ export default function AdminPage() {
 
   // Tab 2: Create / Scan Exam State
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processStatus, setProcessStatus] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -135,8 +136,22 @@ export default function AdminPage() {
   };
 
   // OCR & Create Exam Handlers
+  const isImageFile = (file: File) => {
+    if (file.type && file.type.startsWith("image/")) return true;
+    const name = (file.name || "").toLowerCase();
+    return (
+      name.endsWith(".jpg") ||
+      name.endsWith(".jpeg") ||
+      name.endsWith(".jfif") ||
+      name.endsWith(".png") ||
+      name.endsWith(".webp") ||
+      name.endsWith(".heic") ||
+      name.endsWith(".bmp")
+    );
+  };
+
   const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
+    if (e.target.files && e.target.files.length > 0) {
       setSelectedFiles(Array.from(e.target.files));
       setErrorMsg("");
     }
@@ -144,25 +159,27 @@ export default function AdminPage() {
 
   const fileToBase64 = (file: File): Promise<{ mimeType: string; data: string }> => {
     return new Promise((resolve, reject) => {
-      // Nếu không phải file ảnh, đọc trực tiếp
-      if (!file.type.startsWith("image/")) {
+      // 1. Nếu không phải file ảnh, đọc dữ liệu thô
+      if (!isImageFile(file)) {
         const reader = new FileReader();
         reader.onload = () => {
-          const result = reader.result as string;
-          const [header, base64Data] = result.split(",");
-          const mimeType = header.match(/:(.*?);/)?.[1] || file.type || "application/octet-stream";
-          resolve({ mimeType, data: base64Data });
+          const result = (reader.result as string) || "";
+          const commaIdx = result.indexOf(",");
+          const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
+          resolve({ mimeType: "image/jpeg", data: base64Data });
         };
         reader.onerror = reject;
         reader.readAsDataURL(file);
         return;
       }
 
+      // 2. Tải và tối ưu độ phân giải ảnh (1600px, JPEG chất lượng 82% siêu rõ nét nhưng nhẹ dưới 400KB)
       const img = new Image();
       const objectUrl = URL.createObjectURL(file);
+
       img.onload = () => {
         URL.revokeObjectURL(objectUrl);
-        const maxDimension = 2048;
+        const maxDimension = 1600;
         let { width, height } = img;
 
         if (width > maxDimension || height > maxDimension) {
@@ -179,40 +196,56 @@ export default function AdminPage() {
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d");
+
         if (!ctx) {
           const reader = new FileReader();
           reader.onload = () => {
-            const result = reader.result as string;
-            const [header, base64Data] = result.split(",");
-            const mimeType = header.match(/:(.*?);/)?.[1] || "image/jpeg";
-            resolve({ mimeType, data: base64Data });
+            const result = (reader.result as string) || "";
+            const commaIdx = result.indexOf(",");
+            const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
+            resolve({ mimeType: "image/jpeg", data: base64Data });
           };
           reader.onerror = reject;
           reader.readAsDataURL(file);
           return;
         }
 
-        // Vẽ nền trắng và ảnh, nén JPEG 88% giữ nguyên độ sắc nét chữ viết
+        // Vẽ nền trắng để hỗ trợ cả ảnh nền trong suốt (PNG/WebP/scan)
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
 
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
-        const [header, base64Data] = dataUrl.split(",");
-        resolve({ mimeType: "image/jpeg", data: base64Data });
+        try {
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+          const commaIdx = dataUrl.indexOf(",");
+          const base64Data = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+          resolve({ mimeType: "image/jpeg", data: base64Data });
+        } catch {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = (reader.result as string) || "";
+            const commaIdx = result.indexOf(",");
+            const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
+            resolve({ mimeType: "image/jpeg", data: base64Data });
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        }
       };
+
       img.onerror = () => {
         URL.revokeObjectURL(objectUrl);
         const reader = new FileReader();
         reader.onload = () => {
-          const result = reader.result as string;
-          const [header, base64Data] = result.split(",");
-          const mimeType = header.match(/:(.*?);/)?.[1] || "image/jpeg";
-          resolve({ mimeType, data: base64Data });
+          const result = (reader.result as string) || "";
+          const commaIdx = result.indexOf(",");
+          const base64Data = commaIdx !== -1 ? result.slice(commaIdx + 1) : result;
+          resolve({ mimeType: "image/jpeg", data: base64Data });
         };
         reader.onerror = reject;
         reader.readAsDataURL(file);
       };
+
       img.src = objectUrl;
     });
   };
@@ -652,11 +685,33 @@ export default function AdminPage() {
                 )}
               </h2>
 
-              <div className="border-2 border-dashed border-slate-300 hover:border-indigo-400 rounded-2xl p-6 text-center bg-slate-50/50 transition-colors">
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    setSelectedFiles(Array.from(e.dataTransfer.files));
+                    setErrorMsg("");
+                  }
+                }}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-colors ${
+                  isDragging
+                    ? "border-indigo-500 bg-indigo-50/70"
+                    : "border-slate-300 hover:border-indigo-400 bg-slate-50/50"
+                }`}
+              >
                 <input
                   type="file"
                   multiple
-                  accept="image/*"
+                  accept="image/*,.jpg,.jpeg,.png,.webp,.jfif,.heic"
                   onChange={handleFiles}
                   id="admin-file-upload"
                   className="hidden"
@@ -672,20 +727,42 @@ export default function AdminPage() {
                     Nhấn để chọn ảnh đề thi (hoặc kéo thả vào đây)
                   </span>
                   <span className="text-xs text-slate-500">
-                    Hỗ trợ chọn nhiều trang cùng lúc (JPG, PNG, WEBP)
+                    Hỗ trợ đầy đủ: JPEG, JPG, PNG, WEBP, JFIF (chọn nhiều trang cùng lúc)
                   </span>
                 </label>
 
                 {selectedFiles.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-slate-200 flex flex-wrap gap-2 justify-center">
-                    {selectedFiles.map((f, i) => (
-                      <span
-                        key={i}
-                        className="px-2.5 py-1 text-xs font-medium bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-200"
-                      >
-                        Trang {i + 1}: {f.name}
+                  <div className="mt-4 pt-3 border-t border-slate-200">
+                    <div className="flex items-center justify-between mb-2 px-1">
+                      <span className="text-xs font-semibold text-slate-600">
+                        Đã chọn {selectedFiles.length} trang ảnh:
                       </span>
-                    ))}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedFiles([])}
+                        className="text-xs text-red-600 hover:underline font-medium"
+                      >
+                        Xóa tất cả
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 justify-center">
+                      {selectedFiles.map((f, i) => (
+                        <span
+                          key={i}
+                          className="px-2.5 py-1 text-xs font-medium bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-200 flex items-center gap-1.5"
+                        >
+                          <span>Trang {i + 1}: {f.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                            className="hover:text-red-600 transition-colors"
+                            title="Xóa trang này"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

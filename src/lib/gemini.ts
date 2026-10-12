@@ -28,12 +28,29 @@ export interface ExtractedExamData {
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// Danh sách các mô hình Vision khả dụng thực tế của Google (xếp theo độ ưu tiên)
+function normalizeImageMimeType(mime?: string): string {
+  if (!mime) return "image/jpeg";
+  const m = mime.toLowerCase().trim();
+  if (m === "image/jpg" || m === "image/pjpeg" || m === "image/jfif" || m.includes("jpeg") || m.includes("jpg")) return "image/jpeg";
+  if (m === "image/png") return "image/png";
+  if (m === "image/webp") return "image/webp";
+  if (m === "image/heic" || m === "image/heif") return "image/heic";
+  return "image/jpeg";
+}
+
+function cleanBase64(raw: string): string {
+  if (!raw) return "";
+  const commaIdx = raw.indexOf(",");
+  const clean = commaIdx !== -1 ? raw.slice(commaIdx + 1) : raw;
+  return clean.replace(/\s+/g, "");
+}
+
+// Danh sách các mô hình Vision khả dụng thực tế của Google (xếp theo độ ổn định & tốc độ cao nhất)
 const CANDIDATE_MODELS = [
-  "gemini-3.5-flash",
-  "gemini-flash-latest",
-  "gemini-flash-lite-latest",
   "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-3.5-flash",
+  "gemini-flash-lite-latest",
 ];
 
 export async function extractExamFromImages(
@@ -95,11 +112,13 @@ Do not include markdown backticks around the JSON. Output raw JSON only.`;
 
   const parts: any[] = [{ text: prompt }];
   for (const img of imagesBase64) {
-    // Chuẩn hóa định dạng payload inlineData cho Google Gemini REST API v1beta
+    const mimeType = normalizeImageMimeType(img.mimeType);
+    const data = cleanBase64(img.data);
+    if (!data) continue;
     parts.push({
       inlineData: {
-        mimeType: img.mimeType || "image/jpeg",
-        data: img.data,
+        mimeType,
+        data,
       },
     });
   }
