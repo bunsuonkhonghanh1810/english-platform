@@ -2,17 +2,24 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export default function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const { pathname, search } = request.nextUrl;
+  const sessionCookie = request.cookies.get("english_platform_session");
+  const fullTargetPath = pathname + search;
 
-  // Protect all /admin routes strictly
-  if (pathname.startsWith("/admin")) {
-    const sessionCookie = request.cookies.get("english_platform_session");
-    if (!sessionCookie?.value) {
-      const loginUrl = new URL("/login", request.url);
-      loginUrl.searchParams.set("redirect", pathname);
-      return NextResponse.redirect(loginUrl);
-    }
+  // 1. Chặn các route yêu cầu đăng nhập: /exam, /history, /admin
+  const isProtectedRoute =
+    pathname.startsWith("/exam") ||
+    pathname.startsWith("/history") ||
+    pathname.startsWith("/admin");
 
+  if (isProtectedRoute && !sessionCookie?.value) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("redirect", fullTargetPath);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // 2. Chặn riêng khu vực /admin: chỉ cho phép role admin
+  if (pathname.startsWith("/admin") && sessionCookie?.value) {
     try {
       const decoded = Buffer.from(sessionCookie.value, "base64").toString("utf-8");
       const user = JSON.parse(decoded);
@@ -23,6 +30,7 @@ export default function proxy(request: NextRequest) {
       }
     } catch {
       const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("redirect", fullTargetPath);
       return NextResponse.redirect(loginUrl);
     }
   }
@@ -31,5 +39,11 @@ export default function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin", "/admin/:path*"],
+  matcher: [
+    "/admin",
+    "/admin/:path*",
+    "/exam/:path*",
+    "/history",
+    "/history/:path*",
+  ],
 };

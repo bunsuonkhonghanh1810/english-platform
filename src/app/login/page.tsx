@@ -1,13 +1,16 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { BookOpen, Lock, User, AlertCircle, CheckCircle2, ArrowRight } from "lucide-react";
+import { BookOpen, Lock, User, AlertCircle, CheckCircle2, ArrowRight, LogIn } from "lucide-react";
 import { loginAction } from "@/actions/auth";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTarget = searchParams.get("redirect");
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -26,7 +29,9 @@ export default function LoginPage() {
     try {
       const res = await loginAction({ username, password });
       if (res.success && res.user) {
-        if (res.user.role === "admin") {
+        if (redirectTarget) {
+          router.push(redirectTarget);
+        } else if (res.user.role === "admin") {
           router.push("/admin");
         } else {
           router.push("/");
@@ -53,6 +58,12 @@ export default function LoginPage() {
           <p className="text-xs text-slate-500">Đăng nhập tài khoản Học sinh hoặc Quản trị viên</p>
         </div>
 
+        {redirectTarget && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-semibold text-amber-800 flex items-center gap-2">
+            <span>🔒 Vui lòng đăng nhập để tiếp tục làm bài thi hoặc xem kết quả.</span>
+          </div>
+        )}
+
         {errorMsg && (
           <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs font-semibold text-red-700 flex items-start gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -69,7 +80,7 @@ export default function LoginPage() {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Ví dụ: admin hoặc tenhocsinh"
+                placeholder="Ví dụ: tenhocsinh hoặc admin"
                 className="w-full pl-9 pr-3 py-2.5 text-base sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
               />
             </div>
@@ -92,7 +103,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-sm shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2"
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-sm shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 active:scale-95"
           >
             <span>{isLoading ? "Đang xử lý..." : "Đăng Nhập"}</span>
             <ArrowRight className="w-4 h-4" />
@@ -102,12 +113,27 @@ export default function LoginPage() {
         <div className="pt-4 border-t border-slate-100 text-center text-xs text-slate-500">
           <p>
             Chưa có tài khoản?{" "}
-            <Link href="/register" className="font-bold text-blue-600 hover:underline">
+            <Link
+              href={redirectTarget ? `/register?redirect=${encodeURIComponent(redirectTarget)}` : "/register"}
+              className="font-bold text-blue-600 hover:underline"
+            >
               Đăng ký ngay tại đây
             </Link>
           </p>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-[70vh] flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
   );
 }

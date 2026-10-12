@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { 
   History, Award, BookOpen, Clock, ChevronRight, CheckCircle2, 
   XCircle, RotateCcw, Eye, ArrowUpRight, BookmarkCheck, ArrowRight, 
@@ -27,6 +28,7 @@ interface Attempt {
 }
 
 export default function HistoryPage() {
+  const router = useRouter();
   const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionMsg, setActionMsg] = useState("");
@@ -37,7 +39,11 @@ export default function HistoryPage() {
       // 0. Xác định tài khoản hiện tại
       const { getCurrentUserAction } = await import("@/actions/auth");
       const user = await getCurrentUserAction();
-      const uid = user?.id || "guest";
+      if (!user) {
+        router.replace("/login?redirect=/history");
+        return;
+      }
+      const uid = user.id;
 
       const attemptsMap = new Map<string, Attempt>();
 

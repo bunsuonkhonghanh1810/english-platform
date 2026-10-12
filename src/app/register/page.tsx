@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { BookOpen, Lock, User, Mail, AlertCircle, CheckCircle2, ArrowRight } from "lucide-react";
 import { registerAction } from "@/actions/auth";
 
-export default function RegisterPage() {
+function RegisterForm() {
+  const searchParams = useSearchParams();
+  const redirectTarget = searchParams.get("redirect");
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -161,11 +164,26 @@ export default function RegisterPage() {
 
         <div className="pt-4 border-t border-slate-100 text-center text-xs text-slate-500">
           Đã có tài khoản?{" "}
-          <Link href="/login" className="font-bold text-blue-600 hover:underline">
+          <Link
+            href={redirectTarget ? `/login?redirect=${encodeURIComponent(redirectTarget)}` : "/login"}
+            className="font-bold text-blue-600 hover:underline"
+          >
             Đăng nhập tại đây
           </Link>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-[70vh] flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <RegisterForm />
+    </Suspense>
   );
 }

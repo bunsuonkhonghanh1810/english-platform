@@ -31,7 +31,11 @@ export default function HomePage() {
     async function loadDrafts() {
       const user = await getCurrentUserAction();
       setCurrentUser(user);
-      const uid = user?.id || "guest";
+      if (!user) {
+        setActiveDrafts([]);
+        return;
+      }
+      const uid = user.id;
       const draftsMap = new Map<string, ActiveDraft>();
 
       // 1. Quét từ localStorage của đúng user này
@@ -96,11 +100,20 @@ export default function HomePage() {
       setErrorMsg("Vui lòng nhập mã đề thi 6 ký tự.");
       return;
     }
+    const targetCode = searchCode.trim().toUpperCase();
+    if (!currentUser) {
+      router.push(`/login?redirect=${encodeURIComponent(`/exam/${targetCode}`)}`);
+      return;
+    }
     setErrorMsg("");
-    router.push(`/exam/${searchCode.trim().toUpperCase()}`);
+    router.push(`/exam/${targetCode}`);
   };
 
   const handleRandomExam = async () => {
+    if (!currentUser) {
+      router.push(`/login?redirect=${encodeURIComponent("/exam/J4PRFE")}`);
+      return;
+    }
     setIsLoadingRandom(true);
     try {
       const code = await getRandomExamCodeAction();
@@ -264,7 +277,7 @@ export default function HomePage() {
             <p className="text-xs sm:text-sm text-slate-500">Các đề đã được số hóa hoàn chỉnh kèm đầy đủ đáp án & lời giải</p>
           </div>
           <Link
-            href="/history"
+            href={currentUser ? "/history" : `/login?redirect=${encodeURIComponent("/history")}`}
             className="text-xs sm:text-sm font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-1"
           >
             Lịch sử làm bài <ChevronRight className="w-4 h-4" />
@@ -305,7 +318,7 @@ export default function HomePage() {
                 <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
                   {j4prfeDraft ? (
                     <Link
-                      href="/exam/J4PRFE?mode=test"
+                      href={currentUser ? "/exam/J4PRFE?mode=test" : `/login?redirect=${encodeURIComponent("/exam/J4PRFE?mode=test")}`}
                       className="flex-1 py-2 px-3 text-center rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-sm transition-colors flex items-center justify-center gap-1.5"
                     >
                       <BookmarkCheck className="w-3.5 h-3.5" />
@@ -313,14 +326,14 @@ export default function HomePage() {
                     </Link>
                   ) : (
                     <Link
-                      href="/exam/J4PRFE?mode=test"
+                      href={currentUser ? "/exam/J4PRFE?mode=test" : `/login?redirect=${encodeURIComponent("/exam/J4PRFE?mode=test")}`}
                       className="flex-1 py-2 px-3 text-center rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition-colors"
                     >
                       Làm bài ngay
                     </Link>
                   )}
                   <Link
-                    href="/exam/J4PRFE?mode=study"
+                    href={currentUser ? "/exam/J4PRFE?mode=study" : `/login?redirect=${encodeURIComponent("/exam/J4PRFE?mode=study")}`}
                     className="py-2 px-3 text-center rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition-colors"
                   >
                     Xem đề & Lời giải
@@ -370,11 +383,11 @@ export default function HomePage() {
               </div>
 
               <Link
-                href="/history"
+                href={currentUser ? "/history" : `/login?redirect=${encodeURIComponent("/history")}`}
                 className="py-2.5 px-4 text-center rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2"
               >
                 <span>Xem Lịch Sử Làm Bài</span>
-                <ChevronRight className="w-3.5 h-3.5" />
+                <ChevronRight className="w-4 h-4" />
               </Link>
             </div>
           )}

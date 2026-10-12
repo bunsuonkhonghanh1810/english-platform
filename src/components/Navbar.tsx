@@ -61,7 +61,7 @@ export default function Navbar() {
           </Link>
 
           <Link
-            href="/history"
+            href={currentUser ? "/history" : "/login?redirect=/history"}
             className={`min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors flex items-center gap-1.5 ${
               pathname === "/history"
                 ? "bg-blue-50 text-blue-700 font-semibold"

@@ -91,10 +91,15 @@ function ExamContent({ params }: { params: Promise<{ code: string }> }) {
     async function loadData() {
       setIsLoading(true);
       try {
-        // 0. Xác định tài khoản hiện tại
+        // 0. Xác định tài khoản hiện tại - Bắt buộc đăng nhập để làm bài
         const user = await getCurrentUserAction();
-        const uid = user?.id || "guest";
-        if (isMounted) setCurrentUserId(uid);
+        if (!user) {
+          const currentSearch = typeof window !== "undefined" ? window.location.search : "";
+          router.replace(`/login?redirect=${encodeURIComponent(`/exam/${examCode}${currentSearch}`)}`);
+          return;
+        }
+        const uid = user.id;
+        if (isMounted) setCurrentUserId(user.id);
 
         let loadedExam: ExamData | null = null;
 
