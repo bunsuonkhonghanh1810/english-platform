@@ -3,12 +3,8 @@ dotenv.config({ path: ".env.local" });
 
 import { saveExam } from "../src/lib/data-service";
 import { SEED_EXAM } from "../src/lib/seed-data";
-import { seedAdminIfNotExist } from "../src/actions/auth";
 
 async function main() {
-  console.log("Seeding default admin...");
-  await seedAdminIfNotExist();
-
   console.log("Seeding full 40-question exam ENG001 to Neon Postgres...");
   const saved = await saveExam({
     title: SEED_EXAM.title,

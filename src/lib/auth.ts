@@ -43,8 +43,25 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
     if (!sessionCookie?.value) return null;
 
     const decoded = Buffer.from(sessionCookie.value, "base64").toString("utf-8");
-    const user: SessionUser = JSON.parse(decoded);
-    return user;
+    const sessionUser: SessionUser = JSON.parse(decoded);
+    if (!sessionUser?.id) return null;
+
+    // BẢO MẬT: Kiểm tra lại với Neon DB để xác minh quyền và trạng thái thực tế
+    if (db) {
+      const dbUser = await db.query.users.findFirst({
+        where: eq(schema.users.id, sessionUser.id),
+      });
+      if (!dbUser || dbUser.status !== "approved") {
+        return null;
+      }
+      return {
+        id: dbUser.id,
+        username: dbUser.username,
+        role: dbUser.role as "admin" | "user",
+      };
+    }
+
+    return sessionUser;
   } catch {
     return null;
   }

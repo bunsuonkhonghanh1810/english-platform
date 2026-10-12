@@ -1,9 +1,9 @@
 export const SEED_EXAM = {
-  id: "seed-exam-practice-test-6",
-  code: "ENG001",
+  id: "exam-1791701287321",
+  code: "J4PRFE",
   title: "PRACTICE TEST 6 - Đề Thi Tuyển Sinh Tiếng Anh (40 Câu Chuẩn)",
   totalQuestions: 40,
-  createdAt: new Date().toISOString(),
+  createdAt: "2026-10-11T06:48:08.672Z",
   sections: [
     {
       id: "sec-1",

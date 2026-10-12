@@ -1,4 +1,5 @@
 import { pgTable, text, varchar, integer, timestamp, jsonb, numeric, index } from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
 
 // 1. Người dùng & Phân quyền
 export const users = pgTable("users", {
@@ -59,9 +60,7 @@ export const examAttempts = pgTable(
   "exam_attempts",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
     examId: text("exam_id")
       .notNull()
       .references(() => exams.id, { onDelete: "cascade" }),
@@ -74,12 +73,54 @@ export const examAttempts = pgTable(
     totalCorrect: integer("total_correct").default(0),
     score: numeric("score", { precision: 4, scale: 2 }).default("0.00"),
     startedAt: timestamp("started_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
     completedAt: timestamp("completed_at"),
   },
   (table) => [
     index("attempts_user_exam_idx").on(table.userId, table.examId),
   ]
 );
+
+// Drizzle Relations
+export const usersRelations = relations(users, ({ many }) => ({
+  exams: many(exams),
+  attempts: many(examAttempts),
+}));
+
+export const examsRelations = relations(exams, ({ one, many }) => ({
+  author: one(users, {
+    fields: [exams.createdBy],
+    references: [users.id],
+  }),
+  sections: many(sections),
+  attempts: many(examAttempts),
+}));
+
+export const sectionsRelations = relations(sections, ({ one, many }) => ({
+  exam: one(exams, {
+    fields: [sections.examId],
+    references: [exams.id],
+  }),
+  questions: many(questions),
+}));
+
+export const questionsRelations = relations(questions, ({ one }) => ({
+  section: one(sections, {
+    fields: [questions.sectionId],
+    references: [sections.id],
+  }),
+}));
+
+export const examAttemptsRelations = relations(examAttempts, ({ one }) => ({
+  user: one(users, {
+    fields: [examAttempts.userId],
+    references: [users.id],
+  }),
+  exam: one(exams, {
+    fields: [examAttempts.examId],
+    references: [exams.id],
+  }),
+}));
 
 export type User = typeof users.$inferSelect;
 export type Exam = typeof exams.$inferSelect;

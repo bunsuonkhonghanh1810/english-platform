@@ -6,9 +6,9 @@ import { useRouter } from "next/navigation";
 import { 
   Upload, Sparkles, Plus, Trash2, Save, CheckCircle2, AlertCircle, 
   RefreshCw, Shield, FileText, ChevronRight, Eye, Users, Layers,
-  Check, X, UserX, UserCheck, Clock, BookOpen, ExternalLink
+  Check, X, UserX, UserCheck, Clock, BookOpen, ExternalLink, Pencil, Lock
 } from "lucide-react";
-import { processExamImagesAction, saveExamAction } from "@/actions/exam";
+import { processExamImagesAction, saveExamAction, updateExamAction, getExamAction } from "@/actions/exam";
 import { getAllExamsAdminAction, deleteExamAction } from "@/actions/admin-exam";
 import { getAllUsersAction, updateUserStatusAction, deleteUserAction, getCurrentUserAction } from "@/actions/auth";
 import { generateExamCode } from "@/lib/code-generator";
@@ -51,6 +51,8 @@ export default function AdminPage() {
   const [totalQuestions, setTotalQuestions] = useState(40);
   const [sections, setSections] = useState<AdminSection[]>([]);
   const [isSaved, setIsSaved] = useState(false);
+  const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [editingExamCode, setEditingExamCode] = useState<string | null>(null);
 
   // Tab 3: Users State
   const [usersList, setUsersList] = useState<any[]>([]);
@@ -142,15 +144,76 @@ export default function AdminPage() {
 
   const fileToBase64 = (file: File): Promise<{ mimeType: string; data: string }> => {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        const [header, base64Data] = result.split(",");
-        const mimeType = header.match(/:(.*?);/)?.[1] || "image/jpeg";
-        resolve({ mimeType, data: base64Data });
+      // Nếu không phải file ảnh, đọc trực tiếp
+      if (!file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          const [header, base64Data] = result.split(",");
+          const mimeType = header.match(/:(.*?);/)?.[1] || file.type || "application/octet-stream";
+          resolve({ mimeType, data: base64Data });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const maxDimension = 2048;
+        let { width, height } = img;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            const [header, base64Data] = result.split(",");
+            const mimeType = header.match(/:(.*?);/)?.[1] || "image/jpeg";
+            resolve({ mimeType, data: base64Data });
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+          return;
+        }
+
+        // Vẽ nền trắng và ảnh, nén JPEG 88% giữ nguyên độ sắc nét chữ viết
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+        const [header, base64Data] = dataUrl.split(",");
+        resolve({ mimeType: "image/jpeg", data: base64Data });
       };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          const [header, base64Data] = result.split(",");
+          const mimeType = header.match(/:(.*?);/)?.[1] || "image/jpeg";
+          resolve({ mimeType, data: base64Data });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      };
+      img.src = objectUrl;
     });
   };
 
@@ -177,7 +240,9 @@ export default function AdminPage() {
       setExamTitle(res.data.title || "Đề thi Tiếng Anh");
       setTotalQuestions(res.data.totalQuestions || 40);
       setSections(res.data.sections || []);
-      if (res.suggestedCode) setExamCode(res.suggestedCode);
+      if (!editingExamId && res.suggestedCode) {
+        setExamCode(res.suggestedCode);
+      }
 
       setSuccessMsg("Đã nhận diện và giải đề thành công! Bạn có thể tinh chỉnh các câu bên dưới.");
     } catch (e: any) {
@@ -212,6 +277,106 @@ export default function AdminPage() {
     });
   };
 
+  const handleStartEditExam = async (code: string) => {
+    setIsProcessing(true);
+    setProcessStatus(`Đang tải dữ liệu đề ${code}...`);
+    setErrorMsg("");
+    setSuccessMsg("");
+
+    try {
+      const res = await getExamAction(code);
+      if (!res.success || !res.exam) {
+        throw new Error(res.error || "Không thể nạp dữ liệu đề thi.");
+      }
+
+      const exam = res.exam;
+      setEditingExamId(exam.id);
+      setEditingExamCode(exam.code);
+      setExamCode(exam.code);
+      setExamTitle(exam.title);
+      setTotalQuestions(exam.totalQuestions || 40);
+
+      const mappedSections: AdminSection[] = (exam.sections || []).map((sec: any) => ({
+        title: sec.title || "",
+        passageText: sec.passageText || "",
+        questions: (sec.questions || []).map((q: any) => ({
+          questionNumber: q.questionNumber,
+          questionType: q.questionType || "multiple_choice",
+          prompt: q.prompt || "",
+          options: q.options || { A: "", B: "", C: "", D: "" },
+          underlinedParts: q.underlinedParts || null,
+          correctAnswer: q.correctAnswer || "A",
+          correctionText: q.correctionText || "",
+          explanation: q.explanation || "",
+        })),
+      }));
+
+      setSections(mappedSections);
+      setSelectedFiles([]);
+      setIsSaved(false);
+      setActiveTab("create");
+      setSuccessMsg(`Đang chỉnh sửa đề [${exam.code}]. Bạn có thể tinh chỉnh các câu hỏi và bấm 'Lưu cập nhật' bên dưới.`);
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    } catch (e: any) {
+      setErrorMsg(e.message || "Lỗi khi tải đề thi để chỉnh sửa.");
+    } finally {
+      setIsProcessing(false);
+      setProcessStatus("");
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingExamId(null);
+    setEditingExamCode(null);
+    setExamCode(generateExamCode());
+    setExamTitle("PRACTICE TEST - Đề mới");
+    setTotalQuestions(40);
+    setSections([]);
+    setSelectedFiles([]);
+    setIsSaved(false);
+    setErrorMsg("");
+    setSuccessMsg("");
+  };
+
+  const handleAddQuestion = (sIdx: number) => {
+    setSections((prev) => {
+      const copy = [...prev];
+      const maxNum = copy.flatMap((s) => s.questions).reduce((max, q) => Math.max(max, q.questionNumber || 0), 0);
+      copy[sIdx].questions.push({
+        questionNumber: maxNum + 1,
+        questionType: "multiple_choice",
+        prompt: "",
+        options: { A: "", B: "", C: "", D: "" },
+        correctAnswer: "A",
+        correctionText: "",
+        explanation: "",
+      });
+      return copy;
+    });
+  };
+
+  const handleDeleteQuestion = (sIdx: number, qIdx: number) => {
+    if (!confirm("Bạn có chắc muốn xóa câu hỏi này không?")) return;
+    setSections((prev) => {
+      const copy = [...prev];
+      copy[sIdx].questions.splice(qIdx, 1);
+      return copy;
+    });
+  };
+
+  const handleAddSection = () => {
+    setSections((prev) => [
+      ...prev,
+      {
+        title: "Phần mới: Hướng dẫn phần thi...",
+        passageText: "",
+        questions: [],
+      },
+    ]);
+  };
+
   const handleSaveToDb = async () => {
     if (!examTitle.trim() || sections.length === 0) {
       setErrorMsg("Vui lòng nhập tên đề và có ít nhất 1 phần câu hỏi.");
@@ -222,16 +387,30 @@ export default function AdminPage() {
     setErrorMsg("");
 
     try {
-      const res = await saveExamAction({
-        title: examTitle,
-        code: examCode,
-        totalQuestions,
-        sections,
-      });
+      let res;
+      if (editingExamId) {
+        res = await updateExamAction(editingExamId, {
+          title: examTitle,
+          code: examCode,
+          totalQuestions,
+          sections,
+        });
+      } else {
+        res = await saveExamAction({
+          title: examTitle,
+          code: examCode,
+          totalQuestions,
+          sections,
+        });
+      }
 
       if (res.success) {
         setIsSaved(true);
-        setSuccessMsg(`Đã lưu thành công đề thi với Mã: ${examCode} vào CSDL Neon!`);
+        setSuccessMsg(
+          editingExamId
+            ? `Đã cập nhật thành công đề thi [${examCode}] trên CSDL Neon!`
+            : `Đã lưu thành công đề thi mới với Mã: ${examCode} vào CSDL Neon!`
+        );
         loadExams();
       } else {
         throw new Error(res.error || "Không thể lưu đề.");
@@ -272,12 +451,12 @@ export default function AdminPage() {
             </p>
           </div>
 
-          {/* Tab Switcher */}
-          <div className="flex bg-slate-100 p-1 rounded-xl self-start md:self-auto">
+          {/* Tab Switcher (Cuộn mượt trên màn hình nhỏ iPhone 12) */}
+          <div className="flex bg-slate-100 p-1 rounded-xl w-full sm:w-auto overflow-x-auto scrollbar-none gap-1 self-start md:self-auto">
             <button
               type="button"
               onClick={() => setActiveTab("exams")}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              className={`px-3 sm:px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 ${
                 activeTab === "exams"
                   ? "bg-white text-slate-900 shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
@@ -290,20 +469,29 @@ export default function AdminPage() {
             <button
               type="button"
               onClick={() => setActiveTab("create")}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              className={`px-3 sm:px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 ${
                 activeTab === "create"
                   ? "bg-white text-slate-900 shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              <Plus className="w-4 h-4 text-indigo-600" />
-              <span>Thêm / Quét Đề Mới</span>
+              {editingExamId ? (
+                <>
+                  <Pencil className="w-4 h-4 text-amber-600" />
+                  <span className="text-amber-700 font-bold">Sửa Đề ({editingExamCode})</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4 text-indigo-600" />
+                  <span>Thêm / Quét Đề Mới</span>
+                </>
+              )}
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab("users")}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 relative ${
+              className={`px-3 sm:px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 relative ${
                 activeTab === "users"
                   ? "bg-white text-slate-900 shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
@@ -369,10 +557,10 @@ export default function AdminPage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       <Link
                         href={`/exam/${exam.code}?mode=test`}
-                        className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold flex items-center gap-1"
+                        className="min-h-[36px] px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold flex items-center gap-1 active:scale-95 transition-all"
                       >
                         <ExternalLink className="w-3.5 h-3.5" />
                         <span>Vào làm thử</span>
@@ -380,7 +568,7 @@ export default function AdminPage() {
 
                       <Link
                         href={`/exam/${exam.code}?mode=study`}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1"
+                        className="min-h-[36px] px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 active:scale-95 transition-all"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>Xem lời giải</span>
@@ -388,8 +576,18 @@ export default function AdminPage() {
 
                       <button
                         type="button"
+                        onClick={() => handleStartEditExam(exam.code)}
+                        className="min-h-[36px] px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all border border-amber-200 active:scale-95"
+                        title="Chỉnh sửa đề thi này"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>Sửa đề</span>
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => handleDeleteExam(exam.id, exam.title)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        className="min-h-[36px] min-w-[36px] flex items-center justify-center p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
                         title="Xóa đề thi này"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -402,14 +600,56 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* TAB 2: QUÉT & THÊM ĐỀ MỚI BẰNG GEMINI */}
+        {/* TAB 2: QUÉT & THÊM / SỬA ĐỀ BẰNG GEMINI */}
         {activeTab === "create" && (
           <div className="space-y-6">
+            {/* Edit Mode Banner */}
+            {editingExamId && (
+              <div className="bg-amber-50 border border-amber-200/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-850 text-amber-800 flex items-center justify-center shrink-0 border border-amber-200">
+                    <Pencil className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-amber-900 flex items-center gap-2">
+                      <span>Đang chỉnh sửa đề thi:</span>
+                      <span className="font-mono bg-white px-2.5 py-0.5 rounded-lg border border-amber-300 text-amber-800 font-bold">
+                        {editingExamCode}
+                      </span>
+                    </h3>
+                    <p className="text-xs text-amber-700">
+                      Bạn đang sửa trực tiếp nội dung đề thi này. Hãy kiểm tra các câu hỏi bên dưới và nhấn &quot;Lưu cập nhật đề&quot; để lưu lại.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold shadow-sm transition-all shrink-0 flex items-center gap-1.5 self-start sm:self-auto"
+                >
+                  <X className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Hủy sửa / Tạo đề mới</span>
+                </button>
+              </div>
+            )}
+
             {/* Upload Section */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
-              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Upload className="w-5 h-5 text-indigo-600" />
-                <span>1. Tải ảnh hoặc chụp đề thi (Nhiều trang cùng lúc)</span>
+              <h2 className="text-base font-bold text-slate-900 flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <Upload className="w-5 h-5 text-indigo-600" />
+                  <span>
+                    {editingExamId
+                      ? "1. Quét lại từ ảnh nếu muốn ghi đè (Tùy chọn)"
+                      : "1. Tải ảnh hoặc chụp đề thi (Nhiều trang cùng lúc)"}
+                  </span>
+                </span>
+                {editingExamId && (
+                  <span className="text-xs font-normal text-slate-500">
+                    (Đã nạp sẵn {sections.reduce((acc, s) => acc + s.questions.length, 0)} câu hỏi bên dưới)
+                  </span>
+                )}
               </h2>
 
               <div className="border-2 border-dashed border-slate-300 hover:border-indigo-400 rounded-2xl p-6 text-center bg-slate-50/50 transition-colors">
@@ -482,8 +722,14 @@ export default function AdminPage() {
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
                   <div>
-                    <h2 className="text-base font-bold text-slate-900">2. Duyệt & Tinh chỉnh Đề Thi</h2>
-                    <p className="text-xs text-slate-500">Chỉnh sửa tên đề, mã 6 ký tự, dạng bài, đoạn gạch chân và lời giải.</p>
+                    <h2 className="text-base font-bold text-slate-900">
+                      {editingExamId ? "2. Chỉnh sửa Thông tin & Nội dung Đề" : "2. Duyệt & Tinh chỉnh Đề Thi"}
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      {editingExamId
+                        ? `Đang biên tập đề [${editingExamCode}]. Bạn có thể sửa câu hỏi, đáp án đúng và lời giải.`
+                        : "Chỉnh sửa tên đề, mã 6 ký tự, dạng bài, đoạn gạch chân và lời giải."}
+                    </p>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -491,19 +737,29 @@ export default function AdminPage() {
                       type="button"
                       onClick={handleSaveToDb}
                       disabled={isProcessing}
-                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm transition-all flex items-center gap-1.5"
+                      className={`px-5 py-2.5 text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm transition-all flex items-center gap-1.5 ${
+                        editingExamId
+                          ? "bg-amber-600 hover:bg-amber-700 shadow-amber-600/20"
+                          : "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20"
+                      }`}
                     >
                       <Save className="w-4 h-4" />
-                      <span>{isProcessing ? "Đang lưu..." : "Lưu & Xuất bản vào Neon"}</span>
+                      <span>
+                        {isProcessing
+                          ? "Đang lưu..."
+                          : editingExamId
+                          ? `Lưu cập nhật đề [${editingExamCode}]`
+                          : "Lưu & Xuất bản vào Neon"}
+                      </span>
                     </button>
 
                     {isSaved && (
                       <Link
-                        href={`/exam/${examCode}`}
+                        href={`/exam/${examCode}?mode=test`}
                         className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm transition-all flex items-center gap-1.5"
                       >
                         <Eye className="w-4 h-4" />
-                        <span>Xem bài làm ({examCode})</span>
+                        <span>Làm thử ngay ({examCode})</span>
                       </Link>
                     )}
                   </div>
@@ -522,23 +778,40 @@ export default function AdminPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Mã 6 Ký Tự Duy Nhất</label>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      {editingExamId ? "Mã Đề (Cố định khi sửa)" : "Mã 6 Ký Tự Duy Nhất"}
+                    </label>
                     <div className="flex gap-2">
                       <input
                         type="text"
                         value={examCode}
-                        onChange={(e) => setExamCode(e.target.value.toUpperCase())}
+                        readOnly={Boolean(editingExamId)}
+                        disabled={Boolean(editingExamId)}
+                        onChange={(e) => !editingExamId && setExamCode(e.target.value.toUpperCase())}
                         maxLength={6}
-                        className="w-full px-3 py-2 text-sm font-bold uppercase tracking-wider bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className={`w-full px-3 py-2 text-sm font-bold uppercase tracking-wider rounded-lg border focus:outline-none ${
+                          editingExamId
+                            ? "bg-slate-100 text-slate-600 border-slate-300 cursor-not-allowed"
+                            : "bg-white border-slate-300 focus:ring-1 focus:ring-blue-500"
+                        }`}
                       />
-                      <button
-                        type="button"
-                        onClick={() => setExamCode(generateExamCode())}
-                        title="Tạo mã ngẫu nhiên mới"
-                        className="p-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-slate-700"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                      </button>
+                      {editingExamId ? (
+                        <div
+                          title="Mã đề cố định khi chỉnh sửa đề để bảo toàn kết quả làm bài của học sinh"
+                          className="p-2 bg-amber-100 border border-amber-300 rounded-lg text-amber-700 flex items-center justify-center shrink-0 cursor-help"
+                        >
+                          <Lock className="w-4 h-4" />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setExamCode(generateExamCode())}
+                          title="Tạo mã ngẫu nhiên mới"
+                          className="p-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-slate-700"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -596,9 +869,19 @@ export default function AdminPage() {
                         {section.questions.map((q, qIdx) => (
                           <div key={qIdx} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
                             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/60 pb-2">
-                              <span className="text-xs font-bold bg-slate-800 text-white px-2 py-0.5 rounded">
-                                Câu {q.questionNumber}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold bg-slate-800 text-white px-2 py-0.5 rounded">
+                                  Câu {q.questionNumber}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteQuestion(sIdx, qIdx)}
+                                  className="text-slate-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors"
+                                  title="Xóa câu hỏi này"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
 
                               <div className="flex items-center gap-2">
                                 <label className="text-xs font-semibold text-slate-600">Dạng bài:</label>
@@ -691,8 +974,52 @@ export default function AdminPage() {
                           </div>
                         ))}
                       </div>
+
+                      {/* Add Question Button */}
+                      <div className="pt-2 flex items-center justify-between border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => handleAddQuestion(sIdx)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Thêm câu hỏi vào Phần {sIdx + 1}</span>
+                        </button>
+                      </div>
                     </div>
                   ))}
+
+                  {/* Add Section & Bottom Save Controls */}
+                  <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-200">
+                    <button
+                      type="button"
+                      onClick={handleAddSection}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors"
+                    >
+                      <Plus className="w-4 h-4 text-indigo-600" />
+                      <span>Thêm Phần Thi Mới</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveToDb}
+                      disabled={isProcessing}
+                      className={`px-6 py-2.5 text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm transition-all flex items-center gap-2 ${
+                        editingExamId
+                          ? "bg-amber-600 hover:bg-amber-700 shadow-amber-600/20"
+                          : "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20"
+                      }`}
+                    >
+                      <Save className="w-4 h-4" />
+                      <span>
+                        {isProcessing
+                          ? "Đang lưu..."
+                          : editingExamId
+                          ? `Lưu cập nhật đề [${editingExamCode}]`
+                          : "Lưu & Xuất bản vào Neon"}
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -732,7 +1059,7 @@ export default function AdminPage() {
               <div className="p-12 text-center text-slate-500 text-sm">Chưa có người dùng nào đăng ký.</div>
             ) : (
               <div className="divide-y divide-slate-100 overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full text-left text-xs min-w-[580px]">
                   <thead className="bg-slate-50 text-slate-600 uppercase font-semibold text-[10px] tracking-wider border-b border-slate-100">
                     <tr>
                       <th className="px-5 py-3">Học sinh / Người dùng</th>

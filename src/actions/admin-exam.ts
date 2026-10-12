@@ -3,8 +3,23 @@
 import { db, schema } from "@/db";
 import { eq, desc } from "drizzle-orm";
 import { getAllExams } from "@/lib/data-service";
+import { getCurrentUser } from "@/lib/auth";
+
+async function requireAdmin() {
+  const user = await getCurrentUser();
+  if (!user || user.role !== "admin") {
+    throw new Error("Không có quyền thực hiện. Yêu cầu quyền Quản trị viên.");
+  }
+  return user;
+}
 
 export async function getAllExamsAdminAction() {
+  try {
+    await requireAdmin();
+  } catch {
+    return [];
+  }
+
   if (!db) {
     const local = await getAllExams();
     return local.map((e) => ({
@@ -34,11 +49,12 @@ export async function getAllExamsAdminAction() {
 }
 
 export async function deleteExamAction(examId: string) {
-  if (!db) return { success: false, error: "Chưa kết nối CSDL." };
   try {
+    await requireAdmin();
+    if (!db) return { success: false, error: "Chưa kết nối CSDL." };
     await db.delete(schema.exams).where(eq(schema.exams.id, examId));
     return { success: true };
   } catch (e: any) {
-    return { success: false, error: e.message };
+    return { success: false, error: e.message || "Lỗi xóa đề thi." };
   }
 }
